@@ -1,0 +1,173 @@
+---
+title: "JH-PML-CourseProject"
+author: "Rafael Carvalheira"
+date: "12 de maio de 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/Rafael/Documents/GitHub/Coursera-JH-PracticalML/")
+```
+
+## Summary
+
+This is the final project for the course of practical machine learning of John Hopkins University.
+THe project consists in predict wich type of excersise was made accordingly to sensors data.
+The data set is provided by PUC Rio under a Creative Commons license (CC BY-SA)
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz4gsFRJIep
+
+
+```{r loading, warning = FALSE, message = FALSE}
+##load packages
+library(caret)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+require(gridExtra)
+
+#load data
+train <- fread("pml-training.csv")
+test <- fread("pml-testing.csv")
+```
+
+## Adjusting and cleaning data
+
+```{r , results = 'hide', warning=FALSE}
+#adjusting variable type
+train[, ':='(classe = as.factor(classe)
+             ,user_name = as.factor(user_name)
+             ,cvtd_timestamp = dmy_hm(cvtd_timestamp)
+             ,num_window = as.numeric(num_window)
+             ,kurtosis_roll_belt = as.numeric(kurtosis_roll_belt)
+             ,kurtosis_picth_belt = as.numeric(kurtosis_picth_belt)
+             ,kurtosis_yaw_belt = as.numeric(kurtosis_yaw_belt)
+             ,skewness_roll_belt = as.numeric(skewness_roll_belt)
+             ,skewness_roll_belt.1 = as.numeric(skewness_roll_belt.1)
+             ,skewness_yaw_belt = as.numeric(skewness_yaw_belt)
+             ,max_yaw_belt = as.numeric(max_yaw_belt)
+             ,min_yaw_belt = as.numeric(min_yaw_belt)
+             ,amplitude_yaw_belt = as.numeric(amplitude_yaw_belt)
+             ,kurtosis_roll_arm = as.numeric(kurtosis_roll_arm)
+             ,kurtosis_picth_arm = as.numeric(kurtosis_picth_arm)
+             ,kurtosis_yaw_arm = as.numeric(kurtosis_yaw_arm)
+             ,skewness_roll_arm = as.numeric(skewness_roll_arm)
+             ,skewness_pitch_arm = as.numeric(skewness_pitch_arm)
+             ,skewness_yaw_arm = as.numeric(skewness_yaw_arm)
+             ,kurtosis_roll_dumbbell = as.numeric(kurtosis_roll_dumbbell)
+             ,kurtosis_picth_dumbbell = as.numeric(kurtosis_picth_dumbbell)
+             ,kurtosis_yaw_dumbbell = as.numeric(kurtosis_yaw_dumbbell)
+             ,skewness_roll_dumbbell = as.numeric(skewness_roll_dumbbell)
+             ,skewness_pitch_dumbbell = as.numeric(skewness_pitch_dumbbell)
+             ,skewness_yaw_dumbbell = as.numeric(skewness_yaw_dumbbell)
+             ,max_yaw_dumbbell = as.numeric(max_yaw_dumbbell)
+             ,min_yaw_dumbbell = as.numeric(min_yaw_dumbbell)
+             ,amplitude_yaw_dumbbell = as.numeric(amplitude_yaw_dumbbell)
+             ,magnet_dumbbell_x = as.numeric(magnet_dumbbell_x)
+             ,magnet_dumbbell_y = as.numeric(magnet_dumbbell_y)
+             ,kurtosis_roll_forearm = as.numeric(kurtosis_roll_forearm)
+             ,kurtosis_picth_forearm = as.numeric(kurtosis_picth_forearm)
+             ,kurtosis_yaw_forearm = as.numeric(kurtosis_yaw_forearm)
+             ,skewness_roll_forearm = as.numeric(skewness_roll_forearm)
+             ,skewness_pitch_forearm = as.numeric(skewness_pitch_forearm)
+             ,skewness_yaw_forearm = as.numeric(skewness_yaw_forearm)
+             ,max_yaw_forearm = as.numeric(max_yaw_forearm)
+             ,min_yaw_forearm = as.numeric(min_yaw_forearm)
+             ,amplitude_yaw_forearm = as.numeric(amplitude_yaw_forearm)
+             ,new_window = as.factor(new_window)
+) ]
+```
+
+Columns with NA have only a few rows filled. So for the prediction pourpose I will follow the rule of thumb that if we have more than 50% NA, it's best to drop the column than filling it's missing data.
+```{r}
+#Keeping only columns that have all values
+keepCol <- train[,sapply(.SD, function(col)sum(is.na(col))) == 0]
+trainNoNa <- train[,keepCol, with = FALSE]
+
+```
+
+## The test
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+
+
+### Time
+Since this was an experiment and not an actual day by day monitoring, hardly the time stamp will help us.
+
+```{r}
+#creating week day and hour of the day factor from the timestamp
+evalTime <- train[, .(classe, user_name, dayHour = as.factor(hour(cvtd_timestamp))
+             ,wDay = wday(cvtd_timestamp, label = TRUE))]
+             
+ggplot(data = evalTime,aes(dayHour,user_name, colour = wDay))+
+    geom_point() + facet_grid(.~classe)
+```
+
+As expected the time stamp just stands for the days and time that the test was made.
+So I will not use it on the prediction model.
+
+### Movements
+
+The study took in account 4 monitoring location: Arm, Belt, Dumbell and Forearm.
+
+![Monitoring spots](on-body-sensing-schema.png)
+
+###Predictors
+
+Following the suggestion on the forum I focus on exploratory analisys to best understand data. 
+
+User_name naturally does not correlate to the exercise since all user made all exercise.
+
+New_window has a 2 level factor. One happen only on 2% of the cases. Since there is a somewhat even distribution trought the 5 classes, is unlikely that this predictor can explain much.
+
+num_window proved to be a very good predictor, once that it has visualy no values happening on two different classes.
+
+```{r}
+qplot(trainNoNa$classe, trainNoNa$num_window, col = trainNoNa$classe)
+```
+
+I will check the accuracy of prediction using only this predictor.
+
+```{r , warning=FALSE}
+set.seed(38)
+inTrain <- createDataPartition(y=trainNoNa$classe, p=0.7, list=FALSE)
+
+training <- trainNoNa[inTrain,]
+testing <- trainNoNa[-inTrain,]
+
+y <- training[["classe"]]
+x <- training[,"num_window"]
+
+#fitControlS <- trainControl(method = "cv", number = 5)
+system.time(modelFit <- train(x,y,method="rf",data=training))
+confusionMatrix.train(modelFit)
+
+```
+Train accuracy was very high. Maybe it's over fitting.
+
+Next step predict train data and check how it performs.
+
+```{r}
+pred <- predict(modelFit,testing)
+confusionMatrix(pred,testing[,classe])
+
+```
+
+#Solution
+Performance was great keeping the accuracy high with a low P-value.
+
+I will use this model for the validation set for submition.
+
+```{r}
+predValidation <- predict(modelFit,test)
+
+# Save the solution to a dataframe with two columns: V1 and classe (prediction)
+solution <- data.frame(V1 = test$V1, classe = predValidation)
+
+# Write the solution to file
+write.csv(solution, file = c('jh_pml_courseproj_solution.csv'), row.names = F)
+```
